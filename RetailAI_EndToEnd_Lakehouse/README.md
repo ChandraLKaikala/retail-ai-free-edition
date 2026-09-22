@@ -2,7 +2,6 @@
 
 An end-to-end retail lakehouse project built for **Databricks Free Edition**, demonstrating data engineering, data quality, analytics, machine learning, GenAI, streaming, and runtime validation in one integrated workflow.
 
-> **Project version:** 4.0 Free Edition E2E (2026-09-21)
 
 ## What This Project Demonstrates
 
