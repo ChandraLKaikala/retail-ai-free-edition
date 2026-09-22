@@ -37,11 +37,10 @@ The implementation uses Unity Catalog objects, Delta tables, PySpark, MLflow, St
 
 ## Repository Contents
 
-The current project folder contains **13 Databricks Python notebook source files** plus this README.
+The current project folder contains **12 Databricks Python notebook source files** plus this README.
 
 | Order | File | Purpose |
 |---|---|---|
-| Start | `00_START_HERE_FREE_EDITION.py` | Project entry point, platform boundaries, architecture, and manual run guidance |
 | 1 | `00_setup.py` | Creates governed schemas, metadata-driven quality rules, monitoring objects, and the Unity Catalog volume |
 | 2 | `01_bronze_ingestion.py` | Generates deterministic synthetic retail data and writes 326,308 rows across 15 Bronze Delta tables |
 | 3 | `02_silver_gold_pipeline.py` | Builds typed Silver facts/dimensions and business-facing Gold analytics |
@@ -77,7 +76,7 @@ Run the core notebooks in this sequence:
 07_runtime_validation
 ```
 
-Start with `00_START_HERE_FREE_EDITION.py` for the project walkthrough. After the core pipeline is initialized, use `RESULTS_DASHBOARD.py` to review batch, ML, quality, agent, and realtime results, and use `AGENT_CHAT.py` to interact with the retail agent.
+After the core pipeline is initialized, use `RESULTS_DASHBOARD.py` to review batch, ML, quality, agent, and realtime results, and use `AGENT_CHAT.py` to interact with the retail agent.
 
 Do **not** execute `06B_lakeflow_pipeline_source.py` as a normal notebook. It imports `pyspark.pipelines` and is designed to run in Lakeflow pipeline context.
 
@@ -160,12 +159,11 @@ The project intentionally uses patterns suitable for the Free Edition implementa
 ## Getting Started
 
 1. Import or clone the project into a Databricks workspace.
-2. Open `00_START_HERE_FREE_EDITION.py`.
-3. Run `00_setup.py` and select the target catalog when prompted.
-4. Execute the core notebooks in the recommended order above.
-5. Run `07_runtime_validation.py` to verify the end-to-end implementation.
-6. Open `RESULTS_DASHBOARD.py` to review project results.
-7. Open `AGENT_CHAT.py` to explore the agent interactively.
+2. Run `00_setup.py` and select the target catalog when prompted.
+3. Execute the core notebooks in the recommended order above.
+4. Run `07_runtime_validation.py` to verify the end-to-end implementation.
+5. Open `RESULTS_DASHBOARD.py` to review project results.
+6. Open `AGENT_CHAT.py` to explore the agent interactively.
 
 The notebooks use a catalog widget and default to the current catalog when available.
 
@@ -181,7 +179,6 @@ This repository is a portfolio/demo implementation intended to demonstrate how m
 
 ```text
 RetailAI_EndToEnd_Lakehouse/
-├── 00_START_HERE_FREE_EDITION.py
 ├── 00_setup.py
 ├── 01_bronze_ingestion.py
 ├── 02_silver_gold_pipeline.py
