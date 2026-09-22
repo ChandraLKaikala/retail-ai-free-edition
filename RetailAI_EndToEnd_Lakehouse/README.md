@@ -38,7 +38,7 @@ The implementation uses Unity Catalog objects, Delta tables, PySpark, MLflow, St
 
 ## Repository Contents
 
-The current project folder contains **12 Databricks Python notebook source files** plus this README.
+The current project folder contains **13 Databricks Python notebook source files** plus this README.
 
 | Order | File | Purpose |
 |---|---|---|
@@ -54,6 +54,7 @@ The current project folder contains **12 Databricks Python notebook source files
 | 8 | `07_runtime_validation.py` | Performs end-to-end checks across data, quality, ML, GenAI, streaming, and Unity Catalog resources |
 | Reference | `08_DAB_DEPLOYMENT_GUIDE.py` | Explains deployment through a companion Databricks Declarative Automation Bundle (DAB) |
 | Interactive | `AGENT_CHAT.py` | Notebook-based interactive interface for querying the grounded retail agent |
+| Dashboard | `RESULTS_DASHBOARD.py` | Results dashboard covering executive KPIs, sales, Customer 360, ML outputs, inventory, data quality, agent evaluation, and realtime/streaming metrics |
 
 ## Recommended Manual Run Order
 
@@ -77,7 +78,7 @@ Run the core notebooks in this sequence:
 07_runtime_validation
 ```
 
-Start with `00_START_HERE_FREE_EDITION.py` for the project walkthrough. After the core pipeline is initialized, use `AGENT_CHAT.py` to interact with the retail agent.
+Start with `00_START_HERE_FREE_EDITION.py` for the project walkthrough. After the core pipeline is initialized, use `RESULTS_DASHBOARD.py` to review batch, ML, quality, agent, and realtime results, and use `AGENT_CHAT.py` to interact with the retail agent.
 
 Do **not** execute `06B_lakeflow_pipeline_source.py` as a normal notebook. It imports `pyspark.pipelines` and is designed to run in Lakeflow pipeline context.
 
@@ -138,6 +139,10 @@ This approach provides a repeatable streaming demonstration without requiring an
 
 It is intended to be executed by Lakeflow rather than manually.
 
+### Results Dashboard
+
+`RESULTS_DASHBOARD.py` provides a consolidated notebook dashboard over the project outputs. It includes executive KPIs, recent revenue by channel, Customer 360, churn-risk distribution, customer segments, anomaly results, demand baseline, inventory health, data-quality results, agent evaluation/interactions, live sales, and streaming health. Run the numbered pipeline notebooks first; run `06_realtime_streaming.py` before expecting live streaming views.
+
 ### Runtime Validation
 
 `07_runtime_validation.py` verifies that the major components connect correctly. Validation includes object existence, referential and financial consistency, data-quality execution, ML coverage, GenAI evaluation, streaming output, and the governed Unity Catalog volume.
@@ -160,7 +165,8 @@ The project intentionally uses patterns suitable for the Free Edition implementa
 3. Run `00_setup.py` and select the target catalog when prompted.
 4. Execute the core notebooks in the recommended order above.
 5. Run `07_runtime_validation.py` to verify the end-to-end implementation.
-6. Open `AGENT_CHAT.py` to explore the agent interactively.
+6. Open `RESULTS_DASHBOARD.py` to review project results.
+7. Open `AGENT_CHAT.py` to explore the agent interactively.
 
 The notebooks use a catalog widget and default to the current catalog when available.
 
@@ -188,6 +194,7 @@ RetailAI_EndToEnd_Lakehouse/
 ├── 07_runtime_validation.py
 ├── 08_DAB_DEPLOYMENT_GUIDE.py
 ├── AGENT_CHAT.py
+├── RESULTS_DASHBOARD.py
 └── README.md
 ```
 
