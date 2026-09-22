@@ -51,27 +51,34 @@ print(f"Checkpoint={CHECKPOINT}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Streaming Target Tables
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {CAT}.retail_bronze.realtime_order_events (
   event_id STRING, order_id STRING, customer_id STRING, store_id STRING,
   event_time TIMESTAMP, channel STRING, order_total DOUBLE, discount_amount DOUBLE,
   tax_amount DOUBLE, status STRING, source STRING, _microbatch_id LONG, _ingestion_ts TIMESTAMP
 ) USING DELTA
+TBLPROPERTIES ('delta.enableDeletionVectors': 'true')
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_bronze.realtime_order_events IS 'Bronze landing for realtime order events ingested via AvailableNow streaming from UC Volume'")
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {CAT}.retail_silver.fact_orders_realtime (
   order_id STRING, customer_id STRING, store_id STRING, event_time TIMESTAMP,
   channel STRING, order_total DOUBLE, discount_amount DOUBLE, tax_amount DOUBLE,
   net_revenue DOUBLE, order_status STRING, source STRING, _microbatch_id LONG, _processed_at TIMESTAMP
 ) USING DELTA
+TBLPROPERTIES ('delta.enableDeletionVectors': 'true')
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_silver.fact_orders_realtime IS 'Silver typed realtime order facts with computed net_revenue, upserted via MERGE'")
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {CAT}.retail_gold.live_sales_minute (
   event_minute TIMESTAMP, channel STRING, order_count LONG, unique_customers LONG,
   gross_sales DOUBLE, discounts DOUBLE, revenue DOUBLE, avg_order_value DOUBLE,
   last_updated TIMESTAMP
 ) USING DELTA
+TBLPROPERTIES ('delta.enableDeletionVectors': 'true')
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_gold.live_sales_minute IS 'Gold minute-level realtime sales KPIs by channel, upserted via MERGE on (event_minute, channel)'")
 print("Real-time target tables ready.")
 
 # COMMAND ----------
@@ -119,6 +126,7 @@ print("Structured Streaming file source defined with an explicit schema.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Microbatch Processor
 def process_microbatch(batch_df, batch_id):
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -145,7 +153,7 @@ def process_microbatch(batch_df, batch_id):
             F.round(F.col("order_total")-F.col("discount_amount"),2).alias("net_revenue"),
             F.col("status").alias("order_status"),"source","_microbatch_id")
             .withColumn("_processed_at",F.current_timestamp()))
-        silver_rows = silver_batch.count()
+        silver_rows = input_rows  # Silver batch is a column projection of staged; no filtering changes row count
         silver_batch.createOrReplaceTempView("_rt_silver_batch")
         spark.sql(f"""
         MERGE INTO {CAT}.retail_silver.fact_orders_realtime t USING _rt_silver_batch s ON t.order_id=s.order_id

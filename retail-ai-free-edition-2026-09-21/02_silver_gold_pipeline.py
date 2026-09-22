@@ -259,29 +259,79 @@ print(f"support_operations: {spark.table(f'{CAT}.retail_gold.support_operations'
 
 # COMMAND ----------
 
+# DBTITLE 1,Executive KPI
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_gold.executive_kpi AS
-SELECT current_date() as report_date,
-  (SELECT COUNT(*) FROM {CAT}.retail_silver.dim_customers) as total_customers,
-  (SELECT COUNT(CASE WHEN status='Active' THEN 1 END) FROM {CAT}.retail_silver.dim_customers) as active_customers,
-  (SELECT COUNT(*) FROM {CAT}.retail_silver.fact_orders) as order_attempts,
-  (SELECT COUNT(*) FROM {CAT}.retail_silver.fact_orders WHERE order_status <> 'Cancelled') as total_orders,
-  (SELECT ROUND(SUM(net_revenue),2) FROM {CAT}.retail_silver.fact_orders) as total_revenue,
-  (SELECT ROUND(AVG(net_revenue),2) FROM {CAT}.retail_silver.fact_orders WHERE order_status <> 'Cancelled') as avg_order_value,
-  (SELECT COUNT(*) FROM {CAT}.retail_silver.fact_returns) as total_returns,
-  (SELECT COUNT(*) FROM {CAT}.retail_silver.dim_products WHERE status='Active') as active_products,
-  (SELECT COUNT(*) FROM {CAT}.retail_bronze.support_tickets WHERE status='open') as open_tickets
+WITH cust_stats AS (
+  SELECT COUNT(*) AS total_customers,
+         COUNT(CASE WHEN status='Active' THEN 1 END) AS active_customers
+  FROM {CAT}.retail_silver.dim_customers
+),
+order_stats AS (
+  SELECT COUNT(*) AS order_attempts,
+         COUNT(CASE WHEN order_status <> 'Cancelled' THEN 1 END) AS total_orders,
+         ROUND(SUM(net_revenue),2) AS total_revenue,
+         ROUND(AVG(CASE WHEN order_status <> 'Cancelled' THEN net_revenue END),2) AS avg_order_value
+  FROM {CAT}.retail_silver.fact_orders
+),
+return_stats AS (
+  SELECT COUNT(*) AS total_returns FROM {CAT}.retail_silver.fact_returns
+),
+prod_stats AS (
+  SELECT COUNT(CASE WHEN status='Active' THEN 1 END) AS active_products
+  FROM {CAT}.retail_silver.dim_products
+),
+ticket_stats AS (
+  SELECT COUNT(CASE WHEN status='open' THEN 1 END) AS open_tickets
+  FROM {CAT}.retail_bronze.support_tickets
+)
+SELECT current_date() AS report_date,
+       c.total_customers, c.active_customers,
+       o.order_attempts, o.total_orders, o.total_revenue, o.avg_order_value,
+       r.total_returns, p.active_products, t.open_tickets
+FROM cust_stats c
+CROSS JOIN order_stats o
+CROSS JOIN return_stats r
+CROSS JOIN prod_stats p
+CROSS JOIN ticket_stats t
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_gold.executive_kpi IS 'Single-row executive KPI snapshot with cross-table aggregates computed via CTE scans'")
 print("executive_kpi: 1")
 
 # COMMAND ----------
 
+# DBTITLE 1,Pipeline Run Log
 curated_rows = sum([
     spark.table(f"{CAT}.retail_silver.fact_orders").count(),
     spark.table(f"{CAT}.retail_silver.fact_order_items").count(),
     spark.table(f"{CAT}.retail_gold.customer_360").count(),
     spark.table(f"{CAT}.retail_gold.product_kpis").count(),
 ])
+
+# Add governance comments for key curated tables
+for tbl, comment in [
+    ("retail_silver.dim_date", "Calendar dimension: date_key, year, quarter, month, week, day, season"),
+    ("retail_silver.dim_customers", "Customer dimension with SCD columns (valid_from, valid_to, is_current)"),
+    ("retail_silver.dim_products", "Product dimension with category join, gross margin, and margin_pct"),
+    ("retail_silver.fact_orders", "Order fact: refund-aware net revenue with cancelled orders zeroed"),
+    ("retail_silver.fact_order_items", "Order line items filtered to positive quantity and price"),
+    ("retail_silver.fact_returns", "Return facts with days_to_return computed from order date"),
+    ("retail_silver.fact_inventory_snapshot", "Inventory snapshot: net_quantity, total_received, total_sold per product/warehouse/day"),
+    ("retail_gold.daily_sales_summary", "Daily sales KPIs by order_date and channel with refund-aware revenue"),
+    ("retail_gold.customer_kpis", "Customer KPIs: order count, revenue, recency, tenure"),
+    ("retail_gold.customer_lifetime_value", "CLV: 3-year projected revenue with tier classification (Bronze/Silver/Gold/Platinum)"),
+    ("retail_gold.customer_360", "Unified customer view joining KPIs, CLV, and churn risk"),
+    ("retail_gold.product_kpis", "Product KPIs: sales, refunds, and reviews aggregated independently to avoid fan-out"),
+    ("retail_gold.store_performance", "Store performance: order attempts, revenue, and AOV"),
+    ("retail_gold.supplier_performance", "Supplier performance: product count and rating"),
+    ("retail_gold.inventory_health", "Inventory health: stock status, reorder flags, and current stock levels"),
+    ("retail_gold.support_operations", "Support operations: ticket counts, satisfaction, and resolution rates by category/priority/status"),
+]:
+    try:
+        spark.sql(f"COMMENT ON TABLE {CAT}.{tbl} IS '{comment}'")
+    except Exception:
+        pass
+
 spark.sql(f"""
 INSERT INTO {CAT}.retail_monitoring.pipeline_runs
 VALUES ('{RUN_ID}','02_silver_gold_pipeline','silver_gold','SUCCEEDED',{curated_rows},current_timestamp(),current_timestamp(),'')

@@ -5,6 +5,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,ML Setup
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -28,6 +29,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, roc_auc_score, silhouette_score
 from pyspark.sql.functions import lit, udf
 from pyspark.sql.types import StringType
+
+# Enable Arrow optimization for efficient Spark-to-pandas conversion
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
 
 RUN_ID = str(uuid.uuid4())[:8]
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -154,15 +159,19 @@ print(f"churn_predictions: {spark.table(f'{CAT}.retail_ml.churn_predictions').co
 
 # COMMAND ----------
 
+# DBTITLE 1,ML Segments
 seg_udf = udf(lambda x: SEG.get(int(x),"Unknown"), StringType())
 (spark.createDataFrame(pdf[["customer_id","cluster"]].rename(columns={"cluster":"segment_id"}))
  .withColumn("segment_label", seg_udf("segment_id"))
  .write.format("delta").mode("overwrite").option("overwriteSchema","true")
  .saveAsTable(f"{CAT}.retail_ml.customer_segments"))
 print(f"customer_segments: {spark.table(f'{CAT}.retail_ml.customer_segments').count()}")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_ml.customer_segments IS 'KMeans customer segmentation: segment_id and label per customer'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_ml.churn_predictions IS 'Churn model predictions: probability, predicted label, actual label, cluster, and anomaly flag per customer'")
 
 # COMMAND ----------
 
+# DBTITLE 1,Anomaly & Demand
 (spark.createDataFrame(pdf[["customer_id","anomaly_score_raw","is_anomaly"]])
  .write.format("delta").mode("overwrite").option("overwriteSchema","true")
  .saveAsTable(f"{CAT}.retail_ml.anomaly_scores"))
@@ -187,9 +196,12 @@ SELECT p.product_id, 'next_30d_baseline' AS forecast_period,
 FROM {CAT}.retail_silver.dim_products p LEFT JOIN stats s ON p.product_id=s.product_id
 """)
 print(f"anomaly_scores: {spark.table(f'{CAT}.retail_ml.anomaly_scores').count()}, demand_baseline: {spark.table(f'{CAT}.retail_ml.demand_forecast').count()}")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_ml.anomaly_scores IS 'Isolation Forest anomaly scores: raw anomaly score and binary is_anomaly flag per customer'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_ml.demand_forecast IS 'Deterministic 90-day daily-average demand baseline per product with stability score'")
 
 # COMMAND ----------
 
+# DBTITLE 1,ML Pipeline Log
 spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.anomaly_summary AS SELECT is_anomaly, COUNT(*) as count, round(AVG(churn_probability),4) as avg_churn FROM {CAT}.retail_ml.churn_predictions GROUP BY is_anomaly")
 spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.anomaly_kpi AS SELECT current_date() as report_date, COUNT(*) as total_scored, SUM(is_anomaly) as anomaly_count, round(SUM(is_anomaly)*100.0/COUNT(*),2) as anomaly_rate_pct, round(AVG(churn_probability),4) as avg_churn_risk FROM {CAT}.retail_ml.churn_predictions")
 spark.sql(f"""
@@ -203,6 +215,19 @@ WHERE is_anomaly=1
 ORDER BY anomaly_score_raw DESC LIMIT 500
 """)
 scored_rows = spark.table(f"{CAT}.retail_ml.churn_predictions").count()
+
+# Add governance comments for ML output tables
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_gold.anomaly_summary IS 'Anomaly summary: count and avg churn probability grouped by is_anomaly flag'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_gold.anomaly_kpi IS 'Anomaly KPI: total scored, anomaly count, rate, and avg churn risk'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.anomaly_events IS 'Top 500 anomaly events by score with severity tier and churn probability'")
+
+# Register trained models in the Unity Catalog Model Registry for production traceability
+try:
+    mlflow.register_model(f"runs:/{mlflow.active_run().info.run_id}/churn_pipeline", f"{CAT}.retail_ml.churn_model")
+    print(f"Churn model registered to {CAT}.retail_ml.churn_model")
+except Exception as e:
+    print(f"Model registration skipped: {str(e)[:200]}")
+
 spark.sql(f"""
 INSERT INTO {CAT}.retail_monitoring.pipeline_runs
 VALUES ('{RUN_ID}','04_ml_training','ml','SUCCEEDED',{scored_rows},current_timestamp(),current_timestamp(),'')

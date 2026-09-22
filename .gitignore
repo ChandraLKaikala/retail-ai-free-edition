@@ -1,0 +1,12 @@
+# Hide markdown files
+*.md
+*.markdown
+
+# Databricks
+.databricks/
+*.dbc
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

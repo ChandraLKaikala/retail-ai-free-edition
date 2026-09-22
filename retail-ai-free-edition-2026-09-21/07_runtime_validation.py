@@ -52,6 +52,7 @@ for name,sql,exp in queries:
 
 # COMMAND ----------
 
+# DBTITLE 1,Validation Results
 try:
     customers=scalar(f"SELECT COUNT(*) FROM {CAT}.retail_silver.dim_customers"); scored=scalar(f"SELECT COUNT(*) FROM {CAT}.retail_ml.churn_predictions")
     add("ml_customer_coverage","ml","PASS" if customers==scored else "FAIL",scored,customers)
@@ -89,6 +90,7 @@ for obj in ["orders_bronze_stream","orders_silver_stream","live_sales_minute_pip
         add(f"lakeflow:{obj}","lakeflow","FAIL","ERROR",">0",str(e))
 
 res=spark.createDataFrame(checks); res.write.format("delta").mode("overwrite").option("overwriteSchema","true").saveAsTable(f"{CAT}.retail_monitoring.validation_results")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.validation_results IS 'E2E runtime validation results: object existence, referential integrity, financial consistency, ML coverage, and streaming checks'")
 counts={r['status']:r['count'] for r in res.groupBy('status').count().collect()}
 print(f"PASS={counts.get('PASS',0)} | FAIL={counts.get('FAIL',0)} | SKIP={counts.get('SKIP',0)}")
 validation_status = 'FAILED' if counts.get('FAIL',0)>0 else 'SUCCEEDED'

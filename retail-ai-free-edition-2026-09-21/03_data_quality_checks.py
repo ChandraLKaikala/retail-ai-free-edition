@@ -21,6 +21,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,DQ Engine
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -44,8 +45,10 @@ RESULT_SCHEMA = """
   failed_records LONG, failure_pct DOUBLE, threshold DOUBLE, status STRING,
   run_id STRING, evaluated_at TIMESTAMP
 """
-spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_quality.quality_results ({RESULT_SCHEMA}) USING DELTA")
-spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_quality.quality_results_history ({RESULT_SCHEMA}) USING DELTA")
+spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_quality.quality_results ({RESULT_SCHEMA}) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors': 'true')")
+spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_quality.quality_results_history ({RESULT_SCHEMA}) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors': 'true', 'delta.logRetentionDuration': 'interval 30 days')")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_quality.quality_results IS 'Latest data quality evaluation results: one row per rule per run with pass/fail status and violation counts'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_quality.quality_results_history IS 'Historical data quality results retained for trend analysis across multiple runs'")
 
 # Apply primary key constraint on customers.customer_id so optimizer can skip redundant grouping
 try:
@@ -90,6 +93,7 @@ for e in errors:
 
 # COMMAND ----------
 
+# DBTITLE 1,DQ Summary
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_quality.quality_summary AS
 SELECT severity, COUNT(*) AS rule_count,
@@ -99,6 +103,7 @@ SELECT severity, COUNT(*) AS rule_count,
        ROUND(SUM(CASE WHEN status='PASS' THEN 1 ELSE 0 END)*100.0/COUNT(*),1) AS pass_rate_pct
 FROM {CAT}.retail_quality.quality_results GROUP BY severity
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_quality.quality_summary IS 'Aggregated DQ pass/fail counts and pass rate by severity level'")
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_gold.data_quality_kpi AS
 SELECT current_date() AS report_date, SUM(rule_count) AS total_rules, SUM(passed) AS total_passed,
@@ -106,6 +111,7 @@ SELECT current_date() AS report_date, SUM(rule_count) AS total_rules, SUM(passed
        ROUND(SUM(passed)*100.0/SUM(rule_count),1) AS overall_pass_rate_pct
 FROM {CAT}.retail_quality.quality_summary
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_gold.data_quality_kpi IS 'Single-row DQ KPI: total rules, passed, failed, errors, and overall pass rate'")
 engine_status = 'FAILED' if errored else 'SUCCEEDED'
 error_message = ' | '.join(errors)[:1000]
 run_df = spark.createDataFrame([(RUN_ID,'03_data_quality_checks','quality',engine_status,int(len(results)),NOW,NOW,error_message)],

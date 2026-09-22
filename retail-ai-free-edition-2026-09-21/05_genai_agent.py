@@ -48,6 +48,7 @@ print("Initializing GenAI & Agentic AI System...\n")
 
 # COMMAND ----------
 
+# DBTITLE 1,Knowledge Base Indexing
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_genai.knowledge_documents AS
 SELECT doc_id AS document_id, title, doc_type AS document_type, topic,
@@ -66,6 +67,8 @@ FROM {CAT}.retail_genai.knowledge_documents
 """)
 
 doc_count = spark.table(f"{CAT}.retail_genai.document_chunks").count()
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_genai.knowledge_documents IS 'Curated knowledge base documents filtered to Active status with indexed_at timestamp'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_genai.document_chunks IS 'Document chunks for lexical retrieval: one chunk per document with word count and index metadata'")
 print(f"Knowledge Base: {doc_count} chunks indexed")
 
 # COMMAND ----------
@@ -369,6 +372,7 @@ print("AgentOrchestrator initialized with schema-aligned tools + safety filter."
 
 # COMMAND ----------
 
+# DBTITLE 1,Evaluation & Logging
 TEST_CASES = [
     ("analytics", "What is total revenue?", "analytics"),
     ("analytics", "How many active customers do we have?", "analytics"),
@@ -404,6 +408,7 @@ CREATE OR REPLACE TABLE {CAT}.retail_genai.agent_interactions (
   tool_used STRING, response_summary STRING, status STRING, latency_ms DOUBLE, created_at TIMESTAMP
 ) USING DELTA
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_genai.agent_interactions IS 'Agent interaction log: one row per user query with routed agent, tool, response, status, and latency'")
 spark.createDataFrame(interaction_rows, ["interaction_id","session_id","query","agent_name","tool_used","response_summary","status","latency_ms","created_at"]) \
     .write.mode("overwrite").format("delta").saveAsTable(f"{CAT}.retail_genai.agent_interactions")
 
@@ -414,6 +419,7 @@ CREATE OR REPLACE TABLE {CAT}.retail_genai.evaluation_results (
   latency_ms DOUBLE, evaluated_at TIMESTAMP
 ) USING DELTA
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_genai.evaluation_results IS 'Agent routing evaluation: expected vs actual agent routing with response support check and latency'")
 spark.createDataFrame(evaluation_rows, ["evaluation_id","question_type","query","expected_agent","actual_agent","tool_correct","response_supported","latency_ms","evaluated_at"]) \
     .write.mode("overwrite").format("delta").saveAsTable(f"{CAT}.retail_genai.evaluation_results")
 

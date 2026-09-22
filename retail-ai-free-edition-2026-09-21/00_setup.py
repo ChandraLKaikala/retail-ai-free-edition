@@ -41,8 +41,10 @@ print(f"\n✅ Catalog: {CAT} | schemas ready: {len(schemas)} | version: {PROJECT
 
 # COMMAND ----------
 
+# DBTITLE 1,Quality Rules Table
 from pyspark.sql import Row
-spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_quality.quality_rules (rule_id STRING,dataset STRING,field STRING,rule_type STRING,description STRING,severity STRING,threshold DOUBLE,enabled BOOLEAN,check_expression STRING) USING DELTA")
+spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_quality.quality_rules (rule_id STRING,dataset STRING,field STRING,rule_type STRING,description STRING,severity STRING,threshold DOUBLE,enabled BOOLEAN,check_expression STRING) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors': 'true')")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_quality.quality_rules IS 'Metadata-driven data quality rules: each row defines a SQL check_expression evaluated against Bronze tables'")
 rules = [
   ("QR001","customers","customer_id","uniqueness","No duplicate customer IDs","critical",0.0,True,f"SELECT COUNT(*) - COUNT(DISTINCT customer_id) FROM {CAT}.retail_bronze.customers"),
   ("QR002","customers","email","completeness","Email is populated","error",1.0,True,f"SELECT COUNT(*) FROM {CAT}.retail_bronze.customers WHERE email IS NULL OR TRIM(email) = ''"),
@@ -87,19 +89,32 @@ print(f"quality_rules: {len(rules)}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Monitoring Tables
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.pipeline_runs (
   run_id STRING, notebook STRING, layer STRING, status STRING, rows_written LONG,
   start_time TIMESTAMP, end_time TIMESTAMP, error_message STRING
 ) USING DELTA
+TBLPROPERTIES (
+  'delta.enableDeletionVectors': 'true',
+  'delta.deletedFileRetentionDuration': 'interval 7 days',
+  'delta.logRetentionDuration': 'interval 14 days'
+)
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.pipeline_runs IS 'Pipeline execution audit log: one row per notebook run with status, row count, and timing'")
 spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.streaming_metrics (
   stream_name STRING, microbatch_id LONG, input_rows LONG, bronze_rows LONG,
   silver_rows LONG, batch_started_at TIMESTAMP, batch_finished_at TIMESTAMP,
   processing_ms LONG, event_lag_seconds DOUBLE, status STRING, error_message STRING
 ) USING DELTA
+TBLPROPERTIES (
+  'delta.enableDeletionVectors': 'true',
+  'delta.deletedFileRetentionDuration': 'interval 7 days',
+  'delta.logRetentionDuration': 'interval 14 days'
+)
 """)
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.streaming_metrics IS 'Streaming microbatch health metrics: processing time, event lag, and row counts per batch'")
 _stream_cols = {f.name for f in spark.table(f"{CAT}.retail_monitoring.streaming_metrics").schema.fields}
 if "event_lag_seconds" not in _stream_cols:
     spark.sql(f"ALTER TABLE {CAT}.retail_monitoring.streaming_metrics ADD COLUMNS (event_lag_seconds DOUBLE)")

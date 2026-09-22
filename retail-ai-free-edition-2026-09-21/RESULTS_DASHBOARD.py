@@ -9,6 +9,17 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Catalog Setup
+import re
+try:
+    _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
+except Exception:
+    _default_catalog = "workspace"
+dbutils.widgets.text("catalog", _default_catalog, "Target catalog")
+CAT = dbutils.widgets.get("catalog").strip() or _default_catalog
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", CAT):
+    raise ValueError("Catalog must contain only letters, numbers, and underscores and cannot start with a number.")
+PROJECT_VERSION = "4.0-free-edition-e2e-2026-09-21"
 print(f"Dashboard context ready: {CAT}")
 
 # COMMAND ----------
@@ -169,16 +180,7 @@ ORDER BY CASE q.severity
 
 # COMMAND ----------
 
-import re
-try:
-    _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
-except Exception:
-    _default_catalog = "workspace"
-dbutils.widgets.text("catalog", _default_catalog, "Target catalog")
-CAT = dbutils.widgets.get("catalog").strip() or _default_catalog
-if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", CAT):
-    raise ValueError("Catalog must contain only letters, numbers, and underscores and cannot start with a number.")
-PROJECT_VERSION = "4.0-free-edition-e2e-2026-09-21"
+# DBTITLE 1,Data Quality Summary
 print(f"Loading RetailHub results dashboard from catalog={CAT}...")
 try:
     display(spark.sql(f"""

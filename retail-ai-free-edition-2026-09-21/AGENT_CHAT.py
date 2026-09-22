@@ -15,6 +15,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Agent Tools & Routing
 from pyspark.sql import functions as F
 import re
 try:
@@ -254,7 +255,7 @@ def ask_agent(query):
         if tool == "knowledge":     answer = search_knowledge(query)
         elif tool == "sales":
             days = 7
-            m = re.search(r'(\\d+)\\s*(day|week|month)', query)
+            m = re.search(r'(\d+)\s*(day|week|month)', query)
             if m:
                 n, unit = int(m.group(1)), m.group(2)
                 days = n if unit=="day" else n*7 if unit=="week" else n*30
@@ -268,7 +269,7 @@ def ask_agent(query):
         elif tool == "ml":          answer = get_ml_model_summary()
         elif tool == "realtime":    answer = get_realtime_status()
         elif tool == "customer":
-            m = re.search(r'C\\d{7}', query, re.IGNORECASE)
+            m = re.search(r'C\d{7}', query, re.IGNORECASE)
             cid = m.group().upper() if m else None
             answer = get_customer_360(cid) if cid else "Please provide a customer ID in the form C0000042."
         else:                       answer = search_knowledge(query)
