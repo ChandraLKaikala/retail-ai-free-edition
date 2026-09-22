@@ -1,10 +1,14 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC # 07 · End-to-End Runtime Validation — Free Edition E2E v4.0
 # MAGIC Run after `00`–`06`. It verifies object existence, referential/financial consistency, data-quality execution, ML coverage, agent evaluation, AvailableNow streaming output, and the governed Unity Catalog volume. If the DAB Lakeflow pipeline has also run, its three managed realtime outputs are validated as well.
 
 # COMMAND ----------
 
+# DBTITLE 1,Validation Setup
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -18,6 +22,7 @@ PROJECT_VERSION = "4.0-free-edition-e2e-2026-09-21"
 from datetime import datetime, timezone
 from pyspark.sql import Row
 import uuid
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 RUN_ID=str(uuid.uuid4())[:8]; NOW=datetime.now(timezone.utc).replace(tzinfo=None); checks=[]
 def add(name,category,status,value,expected,detail=""):
     checks.append(Row(check_name=name,category=category,status=status,actual_value=str(value),expected_value=str(expected),detail=str(detail)[:1000],run_id=RUN_ID,evaluated_at=NOW))
@@ -44,7 +49,11 @@ queries=[
 ("negative_inventory_stock",f"SELECT COUNT(*) FROM (SELECT product_id,warehouse_id,SUM(quantity) stock FROM {CAT}.retail_bronze.inventory_events GROUP BY product_id,warehouse_id) x WHERE stock<0",0),
 ("shipment_delivery_temporal",f"SELECT COUNT(*) FROM {CAT}.retail_bronze.shipments WHERE actual_delivery IS NOT NULL AND (to_date(actual_delivery)<to_date(ship_date) OR to_date(actual_delivery)>current_date())",0),
 ("return_date_temporal",f"SELECT COUNT(*) FROM {CAT}.retail_bronze.returns r JOIN {CAT}.retail_bronze.orders o ON r.order_id=o.order_id WHERE to_date(r.return_date)<=to_date(o.order_date) OR to_date(r.return_date)>current_date()",0),
-("dq_rule_errors",f"SELECT COUNT(*) FROM {CAT}.retail_quality.quality_results WHERE status='ERROR'",0)]
+("dq_rule_errors",f"SELECT COUNT(*) FROM {CAT}.retail_quality.quality_results WHERE status='ERROR'",0),
+("bronze_silver_order_reconciliation",f"SELECT COUNT(*) FROM {CAT}.retail_bronze.orders b LEFT ANTI JOIN {CAT}.retail_silver.fact_orders s ON b.order_id=s.order_id",0),
+("silver_gold_customer_reconciliation",f"SELECT COUNT(*) FROM {CAT}.retail_silver.dim_customers s LEFT ANTI JOIN {CAT}.retail_gold.customer_360 g ON s.customer_id=g.customer_id",0),
+("null_churn_predictions",f"SELECT COUNT(*) FROM {CAT}.retail_ml.churn_predictions WHERE churn_probability IS NULL",0),
+("forecast_negative_units",f"SELECT COUNT(*) FROM {CAT}.retail_ml.demand_forecast WHERE predicted_units < 0",0)]
 for name,sql,exp in queries:
     try:
         v=scalar(sql); add(name,"core","PASS" if v==exp else "FAIL",v,exp)
@@ -52,7 +61,7 @@ for name,sql,exp in queries:
 
 # COMMAND ----------
 
-# DBTITLE 1,Validation Results
+# DBTITLE 1,Validation Results with History & Exceptions
 try:
     customers=scalar(f"SELECT COUNT(*) FROM {CAT}.retail_silver.dim_customers"); scored=scalar(f"SELECT COUNT(*) FROM {CAT}.retail_ml.churn_predictions")
     add("ml_customer_coverage","ml","PASS" if customers==scored else "FAIL",scored,customers)
@@ -89,16 +98,40 @@ for obj in ["orders_bronze_stream","orders_silver_stream","live_sales_minute_pip
     except Exception as e:
         add(f"lakeflow:{obj}","lakeflow","FAIL","ERROR",">0",str(e))
 
-res=spark.createDataFrame(checks); res.write.format("delta").mode("overwrite").option("overwriteSchema","true").saveAsTable(f"{CAT}.retail_monitoring.validation_results")
-spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.validation_results IS 'E2E runtime validation results: object existence, referential integrity, financial consistency, ML coverage, and streaming checks'")
+res=spark.createDataFrame(checks)
+
+# Write to latest and history tables
+spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.validation_results_latest (check_name STRING, category STRING, status STRING, actual_value STRING, expected_value STRING, detail STRING, run_id STRING, evaluated_at TIMESTAMP) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')")
+spark.sql(f"CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.validation_results_history (check_name STRING, category STRING, status STRING, actual_value STRING, expected_value STRING, detail STRING, run_id STRING, evaluated_at TIMESTAMP) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors' = 'true', 'delta.logRetentionDuration' = 'interval 30 days')")
+
+res.write.format("delta").mode("overwrite").option("overwriteSchema","true").saveAsTable(f"{CAT}.retail_monitoring.validation_results_latest")
+res.write.format("delta").mode("append").saveAsTable(f"{CAT}.retail_monitoring.validation_results_history")
+
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.validation_results_latest IS 'Latest E2E runtime validation results: object existence, referential integrity, financial consistency, ML coverage, and streaming checks'")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.validation_results_history IS 'Historical runtime validation results for trend analysis across multiple runs'")
 counts={r['status']:r['count'] for r in res.groupBy('status').count().collect()}
 print(f"PASS={counts.get('PASS',0)} | FAIL={counts.get('FAIL',0)} | SKIP={counts.get('SKIP',0)}")
 validation_status = 'FAILED' if counts.get('FAIL',0)>0 else 'SUCCEEDED'
 validation_finished = datetime.now(timezone.utc).replace(tzinfo=None)
-run_df = spark.createDataFrame([(RUN_ID,'07_runtime_validation','validation',validation_status,int(len(checks)),NOW,validation_finished,
+_val_duration = round((validation_finished - NOW).total_seconds(), 2)
+run_df = spark.createDataFrame([(RUN_ID,'07_runtime_validation','validation',validation_status,int(len(checks)),NOW,validation_finished,_val_duration,PROJECT_VERSION,'free-edition',
                                  '' if validation_status=='SUCCEEDED' else 'One or more runtime validation checks failed')],
-    ['run_id','notebook','layer','status','rows_written','start_time','end_time','error_message'])
+    ['run_id','notebook','layer','status','rows_written','start_time','end_time','duration_seconds','project_version','environment','error_message'])
 run_df.write.format('delta').mode('append').saveAsTable(f"{CAT}.retail_monitoring.pipeline_runs")
 display(res.orderBy('status','category','check_name'))
-if counts.get('FAIL',0)>0: print("⚠ Runtime validation found failures; inspect before presenting.")
+# CRITICAL: Raise exception for critical failures (core referential integrity, FK violations, reconciliation)
+critical_categories = ['core', 'objects']
+critical_failures = [r for r in checks if r.status == 'FAIL' and r.category in critical_categories]
+
+if critical_failures:
+    print("\n" + "="*60)
+    print("❌ CRITICAL VALIDATION FAILURES - PIPELINE BLOCKED")
+    print("="*60)
+    for cf in critical_failures[:10]:  # Show first 10
+        print(f"  • {cf.check_name}: expected {cf.expected_value}, got {cf.actual_value}")
+    if len(critical_failures) > 10:
+        print(f"  • ... and {len(critical_failures)-10} more critical failures")
+    raise ValueError(f"Pipeline halted: {len(critical_failures)} critical validation failure(s) detected. Fix data integrity issues before proceeding.")
+
+if counts.get('FAIL',0)>0: print("⚠ Runtime validation found non-critical failures; inspect before presenting.")
 else: print("✅ All executed runtime checks passed.")

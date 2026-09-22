@@ -27,6 +27,7 @@ CAT = dbutils.widgets.get("catalog").strip() or _default_catalog
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", CAT):
     raise ValueError("Catalog must contain only letters, numbers, and underscores and cannot start with a number.")
 PROJECT_VERSION = "4.0-free-edition-e2e-2026-09-21"
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # ── TOOLS ──────────────────────────────────────────────────────────────────
 def search_knowledge(query, limit=5):
@@ -64,7 +65,7 @@ def get_customer_360(customer_id):
     rows = (spark.table(f"{CAT}.retail_gold.customer_360")
             .where(F.col("customer_id") == str(customer_id))
             .select("customer_id","full_name","customer_segment","country","status","total_orders",
-                    F.round("total_revenue",2).alias("revenue"),"days_since_last_order","churn_risk","clv_tier")
+                    F.round("total_revenue",2).alias("revenue"),"days_since_last_order","recency_risk","clv_tier")
             .limit(1).collect())
     if not rows: return f"Customer {customer_id} not found."
     r = rows[0]
@@ -72,7 +73,7 @@ def get_customer_360(customer_id):
             f"- Segment: {r.customer_segment} | Status: {r.status} | Country: {r.country}\n"
             f"- Orders: {r.total_orders} | Revenue: ${r.revenue:,.2f}\n"
             f"- Days since last order: {r.days_since_last_order}\n"
-            f"- Churn Risk: **{r.churn_risk}** | CLV Tier: **{r.clv_tier}**")
+            f"- Recency Risk: **{r.recency_risk}** | CLV Tier: **{r.clv_tier}**")
 
 def get_inventory_risk(limit=15):
     rows = spark.sql(f"""
@@ -106,7 +107,7 @@ def get_anomaly_details(limit=10):
         SELECT entity_id, ROUND(anomaly_score,4) as score,
                ROUND(churn_probability,4) as churn_prob
         FROM {CAT}.retail_monitoring.anomaly_events
-        ORDER BY churn_probability DESC LIMIT {limit}""").collect()
+        ORDER BY anomaly_score DESC LIMIT {limit}""").collect()
     if not rows: return "No anomaly events found."
     lines = ["| Customer ID | Anomaly Score | Churn Prob |", "|-------------|---------------|------------|"]
     for r in rows:
@@ -276,6 +277,14 @@ def ask_agent(query):
         return {"tool": tool, "answer": answer, "status": "OK"}
     except Exception as e:
         return {"tool": tool, "answer": f"Error: {str(e)[:200]}", "status": "ERROR"}
+
+spark.sql(f"""
+CREATE TABLE IF NOT EXISTS {CAT}.retail_genai.chat_interactions (
+  interaction_id STRING, session_id STRING, question STRING, tool_used STRING,
+  answer_preview STRING, status STRING, latency_ms DOUBLE, created_at TIMESTAMP
+) USING DELTA
+""")
+spark.sql(f"COMMENT ON TABLE {CAT}.retail_genai.chat_interactions IS 'Real user interactions from AGENT_CHAT notebook with question, routed tool, answer preview, status, and latency'")
 
 print("Agent ready. Scroll down and enter your question.")
 

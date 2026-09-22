@@ -1,12 +1,16 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC # 01 · Bronze Ingestion — Free Edition E2E v4.0
 # MAGIC Creates **326,308 deterministic synthetic rows across 15 Bronze tables**, anchored to the Spark session's current date.
-# MAGIC
+# MAGIC 
 # MAGIC The generator enforces stronger realism: age-aware order states, coherent payment state, cancelled orders are never shipped, every `Returned` order has an approved purchased-product return, inventory begins with opening stock and cannot become physically negative, refunds are capped to purchased net value, and verified reviews are tied to completed/returned purchases.
 
 # COMMAND ----------
 
+# DBTITLE 1,Bronze Setup
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -22,8 +26,10 @@ from datetime import datetime, timedelta, date, timezone
 from pyspark.sql import Row
 from pyspark.sql.functions import lit
 
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 RUN_ID = str(uuid.uuid4())[:8]
-NOW = datetime.now(timezone.utc).replace(tzinfo=None)
+_bronze_start = datetime.now(timezone.utc).replace(tzinfo=None)
+NOW = _bronze_start
 BATCH_ID = f"BATCH_{NOW:%Y%m%d_%H%M%S}"
 SEED = 42
 BASE = spark.sql("SELECT current_date() AS d").first()["d"]
@@ -410,9 +416,12 @@ print(f"knowledge_documents: {len(docs)}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Bronze Monitoring
 TOTAL_ROWS = 326_308
+_bronze_end = datetime.now(timezone.utc).replace(tzinfo=None)
+_bronze_duration = round((_bronze_end - _bronze_start).total_seconds(), 2)
 spark.sql(f"""
 INSERT INTO {CAT}.retail_monitoring.pipeline_runs
-VALUES ('{RUN_ID}','01_bronze_ingestion','bronze','SUCCEEDED',{TOTAL_ROWS},current_timestamp(),current_timestamp(),'')
+VALUES ('{RUN_ID}','01_bronze_ingestion','bronze','SUCCEEDED',{TOTAL_ROWS},timestamp('{_bronze_start}'),timestamp('{_bronze_end}'),{_bronze_duration},'{PROJECT_VERSION}','free-edition','')
 """)
-print(f"Bronze complete: 15 tables | {TOTAL_ROWS:,} baseline rows.")
+print(f"Bronze complete: 15 tables | {TOTAL_ROWS:,} baseline rows. | duration={_bronze_duration}s")

@@ -1,12 +1,16 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## 02 - Silver & Gold · Curated Analytics Layer
 # MAGIC Transforms Bronze into typed Silver facts/dimensions and business-facing Gold products. Revenue is refund-aware, cancelled orders recognize zero revenue, product KPIs aggregate sales/reviews/refunds independently to avoid many-to-many inflation, and dates are explicitly typed.
-# MAGIC
+# MAGIC 
 # MAGIC The batch Gold layer is complemented by `06_realtime_streaming`, which maintains separate live minute-level KPIs without rebuilding historical tables.
 
 # COMMAND ----------
 
+# DBTITLE 1,Silver/Gold Setup
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -21,8 +25,10 @@ import uuid
 from datetime import datetime, timezone
 from pyspark.sql import Row
 
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 RUN_ID = str(uuid.uuid4())[:8]
-NOW = datetime.now(timezone.utc).replace(tzinfo=None)
+_silver_start = datetime.now(timezone.utc).replace(tzinfo=None)
+NOW = _silver_start
 print(f"Run: {RUN_ID}")
 
 # COMMAND ----------
@@ -127,6 +133,7 @@ print(f"fact_payments: {spark.table(f'{CAT}.retail_silver.fact_payments').count(
 
 # COMMAND ----------
 
+# DBTITLE 1,Silver Facts: Returns & Inventory
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_silver.fact_returns AS
 SELECT r.return_id, r.order_id, r.product_id, r.reason, to_date(r.return_date) as return_date,
@@ -136,7 +143,7 @@ FROM {CAT}.retail_bronze.returns r
 LEFT JOIN {CAT}.retail_bronze.orders o ON r.order_id=o.order_id
 """)
 spark.sql(f"""
-CREATE OR REPLACE TABLE {CAT}.retail_silver.fact_inventory_snapshot AS
+CREATE OR REPLACE TABLE {CAT}.retail_silver.fact_inventory_daily_movement AS
 SELECT product_id, warehouse_id, to_date(event_date) as snapshot_date,
        SUM(quantity) as net_quantity,
        SUM(CASE WHEN event_type IN ('receipt','return') THEN quantity ELSE 0 END) as total_received,
@@ -145,7 +152,7 @@ SELECT product_id, warehouse_id, to_date(event_date) as snapshot_date,
 FROM {CAT}.retail_bronze.inventory_events
 GROUP BY product_id, warehouse_id, to_date(event_date)
 """)
-print(f"fact_returns: {spark.table(f'{CAT}.retail_silver.fact_returns').count()}, fact_inventory_snapshot: {spark.table(f'{CAT}.retail_silver.fact_inventory_snapshot').count()}")
+print(f"fact_returns: {spark.table(f'{CAT}.retail_silver.fact_returns').count()}, fact_inventory_daily_movement: {spark.table(f'{CAT}.retail_silver.fact_inventory_daily_movement').count()}")
 
 # COMMAND ----------
 
@@ -185,7 +192,7 @@ print(f"customer_kpis: {spark.table(f'{CAT}.retail_gold.customer_kpis').count()}
 spark.sql(f"""
 CREATE OR REPLACE TABLE {CAT}.retail_gold.customer_lifetime_value AS
 SELECT customer_id, full_name, customer_segment, total_revenue as historical_revenue, total_orders, avg_order_value, tenure_days,
-       CASE WHEN tenure_days>=0 THEN round(total_revenue/GREATEST(tenure_days,30)*365*3,2) ELSE 0 END as predicted_3yr_clv,
+       CASE WHEN tenure_days>=0 THEN round(total_revenue/GREATEST(tenure_days,30)*365*3,2) ELSE 0 END as baseline_3yr_clv,
        'historical_run_rate_floor_30d' as clv_method,
        CASE WHEN total_revenue>=5000 THEN 'Platinum' WHEN total_revenue>=2000 THEN 'Gold' WHEN total_revenue>=500 THEN 'Silver' ELSE 'Bronze' END as clv_tier
 FROM {CAT}.retail_gold.customer_kpis
@@ -194,7 +201,7 @@ print(f"customer_lifetime_value: {spark.table(f'{CAT}.retail_gold.customer_lifet
 
 # COMMAND ----------
 
-spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.customer_360 AS SELECT ck.customer_id, ck.full_name, ck.customer_segment, ck.country, ck.status, ck.total_orders, ck.total_revenue, ck.avg_order_value, ck.days_since_last_order, ck.tenure_days, ck.loyalty_points, clv.predicted_3yr_clv, clv.clv_tier, CASE WHEN ck.days_since_last_order>365 THEN 'High' WHEN ck.days_since_last_order>180 THEN 'Medium' ELSE 'Low' END as churn_risk FROM {CAT}.retail_gold.customer_kpis ck LEFT JOIN {CAT}.retail_gold.customer_lifetime_value clv ON ck.customer_id=clv.customer_id")
+spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.customer_360 AS SELECT ck.customer_id, ck.full_name, ck.customer_segment, ck.country, ck.status, ck.total_orders, ck.total_revenue, ck.avg_order_value, ck.days_since_last_order, ck.tenure_days, ck.loyalty_points, clv.baseline_3yr_clv, clv.clv_tier, CASE WHEN ck.days_since_last_order>365 THEN 'High' WHEN ck.days_since_last_order>180 THEN 'Medium' ELSE 'Low' END as recency_risk FROM {CAT}.retail_gold.customer_kpis ck LEFT JOIN {CAT}.retail_gold.customer_lifetime_value clv ON ck.customer_id=clv.customer_id")
 print(f"customer_360: {spark.table(f'{CAT}.retail_gold.customer_360').count()}")
 
 # COMMAND ----------
@@ -249,7 +256,7 @@ print(f"store_performance: {spark.table(f'{CAT}.retail_gold.store_performance').
 
 # COMMAND ----------
 
-spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.inventory_health AS SELECT i.product_id, p.product_name, p.category_name, i.warehouse_id, SUM(i.net_quantity) as current_stock, SUM(i.total_sold) as total_sold, CASE WHEN SUM(i.net_quantity)<=0 THEN 'Out of Stock' WHEN SUM(i.net_quantity)<=10 THEN 'Critical' WHEN SUM(i.net_quantity)<=50 THEN 'Low' WHEN SUM(i.net_quantity)<=200 THEN 'Normal' ELSE 'Overstocked' END as stock_status, CASE WHEN SUM(i.net_quantity)<=10 THEN true ELSE false END as reorder_flag FROM {CAT}.retail_silver.fact_inventory_snapshot i LEFT JOIN {CAT}.retail_silver.dim_products p ON i.product_id=p.product_id GROUP BY i.product_id,p.product_name,p.category_name,i.warehouse_id")
+spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_gold.inventory_health AS SELECT i.product_id, p.product_name, p.category_name, i.warehouse_id, SUM(i.net_quantity) as current_stock, SUM(i.total_sold) as total_sold, CASE WHEN SUM(i.net_quantity)<=0 THEN 'Out of Stock' WHEN SUM(i.net_quantity)<=10 THEN 'Critical' WHEN SUM(i.net_quantity)<=50 THEN 'Low' WHEN SUM(i.net_quantity)<=200 THEN 'Normal' ELSE 'Overstocked' END as stock_status, CASE WHEN SUM(i.net_quantity)<=10 THEN true ELSE false END as reorder_flag FROM {CAT}.retail_silver.fact_inventory_daily_movement i LEFT JOIN {CAT}.retail_silver.dim_products p ON i.product_id=p.product_id GROUP BY i.product_id,p.product_name,p.category_name,i.warehouse_id")
 print(f"inventory_health: {spark.table(f'{CAT}.retail_gold.inventory_health').count()}")
 
 # COMMAND ----------
@@ -308,6 +315,13 @@ curated_rows = sum([
     spark.table(f"{CAT}.retail_gold.product_kpis").count(),
 ])
 
+# Metric Definitions (documented explicitly for business clarity):
+# - net_revenue = order_total - discount_amount - approved_refund_amount (Cancelled orders = 0)
+# - avg_order_value (AOV) = AVG(net_revenue) for non-cancelled orders only
+# - baseline_3yr_clv = historical revenue run-rate projection (total_revenue / tenure_days * 365 * 3, floor 30 days)
+# - recency_risk = rule-based High/Medium/Low based on days_since_last_order (>365/>180/<=180)
+# - refund_amount = applies only when return status = 'Approved'
+
 # Add governance comments for key curated tables
 for tbl, comment in [
     ("retail_silver.dim_date", "Calendar dimension: date_key, year, quarter, month, week, day, season"),
@@ -316,11 +330,11 @@ for tbl, comment in [
     ("retail_silver.fact_orders", "Order fact: refund-aware net revenue with cancelled orders zeroed"),
     ("retail_silver.fact_order_items", "Order line items filtered to positive quantity and price"),
     ("retail_silver.fact_returns", "Return facts with days_to_return computed from order date"),
-    ("retail_silver.fact_inventory_snapshot", "Inventory snapshot: net_quantity, total_received, total_sold per product/warehouse/day"),
+    ("retail_silver.fact_inventory_daily_movement", "Inventory daily movement: net_quantity, total_received, total_sold per product/warehouse/day"),
     ("retail_gold.daily_sales_summary", "Daily sales KPIs by order_date and channel with refund-aware revenue"),
     ("retail_gold.customer_kpis", "Customer KPIs: order count, revenue, recency, tenure"),
-    ("retail_gold.customer_lifetime_value", "CLV: 3-year projected revenue with tier classification (Bronze/Silver/Gold/Platinum)"),
-    ("retail_gold.customer_360", "Unified customer view joining KPIs, CLV, and churn risk"),
+    ("retail_gold.customer_lifetime_value", "CLV: baseline_3yr_clv = historical revenue run-rate projection (not predictive ML), with tier classification (Bronze/Silver/Gold/Platinum)"),
+    ("retail_gold.customer_360", "Unified customer view joining KPIs, CLV, and recency_risk (rule-based recency categorization, not ML churn prediction)"),
     ("retail_gold.product_kpis", "Product KPIs: sales, refunds, and reviews aggregated independently to avoid fan-out"),
     ("retail_gold.store_performance", "Store performance: order attempts, revenue, and AOV"),
     ("retail_gold.supplier_performance", "Supplier performance: product count and rating"),
@@ -334,6 +348,6 @@ for tbl, comment in [
 
 spark.sql(f"""
 INSERT INTO {CAT}.retail_monitoring.pipeline_runs
-VALUES ('{RUN_ID}','02_silver_gold_pipeline','silver_gold','SUCCEEDED',{curated_rows},current_timestamp(),current_timestamp(),'')
+VALUES ('{RUN_ID}','02_silver_gold_pipeline','silver_gold','SUCCEEDED',{curated_rows},timestamp('{_silver_start}'),current_timestamp(),{round((datetime.now(timezone.utc).replace(tzinfo=None) - _silver_start).total_seconds(), 2)},'{PROJECT_VERSION}','free-edition','')
 """)
 print(f"Silver & Gold complete. Key curated rows: {curated_rows:,}")

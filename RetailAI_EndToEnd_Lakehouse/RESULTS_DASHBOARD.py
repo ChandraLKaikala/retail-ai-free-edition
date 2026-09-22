@@ -5,7 +5,7 @@
 # MAGIC
 # MAGIC The optimized dashboard references tables created by this project. Run the numbered pipeline notebooks first. For Free Edition live data, run `06_realtime_streaming`; each invocation processes a new AvailableNow increment and exits. Re-run it, then refresh the live cells. The DAB also provides a managed Lakeflow pipeline path.
 # MAGIC
-# MAGIC Exact object counts should be queried dynamically from the selected catalog; `PLATFORM_GUIDE` includes the inventory query.
+# MAGIC Exact object counts should be queried dynamically from the selected catalog.
 
 # COMMAND ----------
 
@@ -20,6 +20,7 @@ CAT = dbutils.widgets.get("catalog").strip() or _default_catalog
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", CAT):
     raise ValueError("Catalog must contain only letters, numbers, and underscores and cannot start with a number.")
 PROJECT_VERSION = "4.0-free-edition-e2e-2026-09-21"
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 print(f"Dashboard context ready: {CAT}")
 
 # COMMAND ----------
@@ -65,8 +66,8 @@ ORDER BY order_date DESC, revenue DESC
 display(spark.sql(f"""
 SELECT customer_id, full_name, customer_segment, country,
   total_orders, ROUND(total_revenue,2) as lifetime_revenue,
-  days_since_last_order, churn_risk, clv_tier,
-  ROUND(predicted_3yr_clv,2) as predicted_3yr_clv
+  days_since_last_order, recency_risk, clv_tier,
+  ROUND(baseline_3yr_clv,2) as baseline_3yr_clv
 FROM {CAT}.retail_gold.customer_360
 ORDER BY total_revenue DESC
 LIMIT 20
@@ -120,7 +121,7 @@ SELECT a.entity_id as customer_id, c.customer_segment, c.country,
   c.total_revenue, c.days_since_last_order
 FROM {CAT}.retail_monitoring.anomaly_events a
 JOIN {CAT}.retail_gold.customer_360 c ON a.entity_id = c.customer_id
-ORDER BY a.churn_probability DESC
+ORDER BY a.anomaly_score DESC
 LIMIT 20
 """))
 

@@ -1,8 +1,11 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC # 06B · Lakeflow Managed Realtime Pipeline Source
 # MAGIC **Do not run this notebook as a normal notebook.** It is source code for a Lakeflow pipeline and imports `pyspark.pipelines`, which is available only in pipeline context.
-# MAGIC
+# MAGIC 
 # MAGIC The companion DAB deploys it as a **serverless** pipeline. It reads the same Unity Catalog landing folder used by `06_realtime_streaming`, creates a streaming Bronze table with expectations, a streaming Silver table, and a materialized Gold minute-level view. The bundle keeps the pipeline triggered by default to conserve Free Edition quota; an optional continuous job is included but deployed paused.
 
 # COMMAND ----------

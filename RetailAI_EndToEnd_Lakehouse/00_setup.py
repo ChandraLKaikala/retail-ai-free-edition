@@ -1,16 +1,20 @@
 # Databricks notebook source
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC # 00 · Project Setup — Free Edition E2E v4.0
 # MAGIC Creates the governed schemas, metadata-driven quality rules, monitoring tables, and a Unity Catalog managed volume used by the Free Edition streaming demo.
-# MAGIC
+# MAGIC 
 # MAGIC **Manual notebook order:** `00_setup` → `01_bronze_ingestion` → `02_silver_gold_pipeline` → `03_data_quality_checks` → `04_ml_training` → `05_genai_agent` → `06_realtime_streaming` → `07_runtime_validation`.
-# MAGIC
+# MAGIC 
 # MAGIC `06_realtime_streaming` is deliberately **serverless-safe**: it lands a finite event batch in a Unity Catalog Volume, consumes all newly available files with Structured Streaming `Trigger.AvailableNow()`, updates Bronze/Silver/Gold, then exits. Re-run it to simulate the next near-real-time increment.
-# MAGIC
+# MAGIC 
 # MAGIC `06B_lakeflow_pipeline_source` is the managed Lakeflow pipeline source used by the companion Declarative Automation Bundle (DAB). Do not run that notebook directly; Lakeflow evaluates it in pipeline context.
 
 # COMMAND ----------
 
+# DBTITLE 1,Setup & UTC Timezone
 import re
 try:
     _default_catalog = spark.sql("SELECT current_catalog() AS catalog").first()["catalog"]
@@ -29,6 +33,7 @@ for s in schemas:
     print(f"✓ Schema ready: {CAT}.{s}")
 
 for key, value in {
+    "spark.sql.session.timeZone": "UTC",
     "spark.databricks.delta.optimizeWrite.enabled": "true",
     "spark.databricks.delta.autoCompact.enabled": "true",
 }.items():
@@ -43,7 +48,7 @@ print(f"\n✅ Catalog: {CAT} | schemas ready: {len(schemas)} | version: {PROJECT
 
 # DBTITLE 1,Quality Rules Table
 from pyspark.sql import Row
-spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_quality.quality_rules (rule_id STRING,dataset STRING,field STRING,rule_type STRING,description STRING,severity STRING,threshold DOUBLE,enabled BOOLEAN,check_expression STRING) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors': 'true')")
+spark.sql(f"CREATE OR REPLACE TABLE {CAT}.retail_quality.quality_rules (rule_id STRING,dataset STRING,field STRING,rule_type STRING,description STRING,severity STRING,threshold DOUBLE,enabled BOOLEAN,check_expression STRING) USING DELTA TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')")
 spark.sql(f"COMMENT ON TABLE {CAT}.retail_quality.quality_rules IS 'Metadata-driven data quality rules: each row defines a SQL check_expression evaluated against Bronze tables'")
 rules = [
   ("QR001","customers","customer_id","uniqueness","No duplicate customer IDs","critical",0.0,True,f"SELECT COUNT(*) - COUNT(DISTINCT customer_id) FROM {CAT}.retail_bronze.customers"),
@@ -91,14 +96,15 @@ print(f"quality_rules: {len(rules)}")
 
 # DBTITLE 1,Monitoring Tables
 spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.pipeline_runs (
+CREATE OR REPLACE TABLE {CAT}.retail_monitoring.pipeline_runs (
   run_id STRING, notebook STRING, layer STRING, status STRING, rows_written LONG,
-  start_time TIMESTAMP, end_time TIMESTAMP, error_message STRING
+  start_time TIMESTAMP, end_time TIMESTAMP, duration_seconds DOUBLE, 
+  project_version STRING, environment STRING, error_message STRING
 ) USING DELTA
 TBLPROPERTIES (
-  'delta.enableDeletionVectors': 'true',
-  'delta.deletedFileRetentionDuration': 'interval 7 days',
-  'delta.logRetentionDuration': 'interval 14 days'
+  'delta.enableDeletionVectors' = 'true',
+  'delta.deletedFileRetentionDuration' = 'interval 7 days',
+  'delta.logRetentionDuration' = 'interval 14 days'
 )
 """)
 spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.pipeline_runs IS 'Pipeline execution audit log: one row per notebook run with status, row count, and timing'")
@@ -109,9 +115,9 @@ CREATE TABLE IF NOT EXISTS {CAT}.retail_monitoring.streaming_metrics (
   processing_ms LONG, event_lag_seconds DOUBLE, status STRING, error_message STRING
 ) USING DELTA
 TBLPROPERTIES (
-  'delta.enableDeletionVectors': 'true',
-  'delta.deletedFileRetentionDuration': 'interval 7 days',
-  'delta.logRetentionDuration': 'interval 14 days'
+  'delta.enableDeletionVectors' = 'true',
+  'delta.deletedFileRetentionDuration' = 'interval 7 days',
+  'delta.logRetentionDuration' = 'interval 14 days'
 )
 """)
 spark.sql(f"COMMENT ON TABLE {CAT}.retail_monitoring.streaming_metrics IS 'Streaming microbatch health metrics: processing time, event lag, and row counts per batch'")
